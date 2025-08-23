@@ -1,0 +1,41 @@
+# PDF Extraction
+PyMuPDF
+pdfplumber
+
+# # NLP and Embedding
+# nltk
+# sentence-transformers
+# spacy
+
+# # Knowledge Graph
+# networkx
+# rdflib
+
+# # Vector Indexing and Retrieval
+# faiss-cpu
+
+# Deep Learning and Transformers
+torch
+transformers
+
+# Image Processing
+Pillow
+
+# # Optional: For multi-modal models and advanced retrieval
+# weaviate-client
+
+# # API development (if building web service)
+# fastapi
+# uvicorn
+
+# # For Table DataFrame manipulation
+# pandas
+
+# # Optional: Haystack RAG framework for advanced pipelines
+# farm-haystack
+
+# # Required for camelot PDF parsing
+# opencv-python
+
+# # Optional: If you want file upload/download in API
+# python-multipart
