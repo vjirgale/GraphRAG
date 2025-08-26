@@ -3,9 +3,9 @@ PyMuPDF
 pdfplumber
 
 # # NLP and Embedding
-# nltk
-# sentence-transformers
-# spacy
+nltk
+sentence-transformers
+spacy
 
 # # Knowledge Graph
 # networkx
@@ -30,6 +30,9 @@ Pillow
 
 # # For Table DataFrame manipulation
 # pandas
+
+# For text chunking
+langchain-text-splitters
 
 # # Optional: Haystack RAG framework for advanced pipelines
 # farm-haystack

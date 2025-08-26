@@ -5,14 +5,31 @@ import os
 from data_manager import record_extracted_files, OUTPUT_DIR
 
 def process_pdf(pdf_path):
+    """
+    Processes a PDF file to extract text, images, and tables.
+
+    Args:
+        pdf_path (str): The path to the PDF file.
+
+    Returns:
+        tuple: A tuple containing:
+            - str: Concatenated text from all pages.
+            - list: A list of file paths to extracted images.
+            - list: A list of extracted tables (each table is a list of lists).
+    """
     all_text = []
     all_images = []
     all_tables = []
     extracted_files = []
 
-    # Open both fitz and pdfplumber
-    doc = fitz.open(pdf_path)
-    with pdfplumber.open(pdf_path) as plumber_pdf:
+    try:
+        doc = fitz.open(pdf_path)
+        plumber_pdf = pdfplumber.open(pdf_path)
+    except Exception as e:
+        print(f"Error opening PDF file {pdf_path}: {e}")
+        return "", [], [] # Return empty data on error
+
+    with doc, plumber_pdf as plumber_pdf_context:
         for page_num in range(len(doc)):
             # Text extraction
             page = doc[page_num]
@@ -35,7 +52,7 @@ def process_pdf(pdf_path):
                     print(f"Error saving image {image_filename}: {img_err}")
 
             # Table extraction
-            plumber_page = plumber_pdf.pages[page_num]
+            plumber_page = plumber_pdf_context.pages[page_num] # Use plumber_pdf_context
             tables = plumber_page.extract_tables()
             for t_idx, table in enumerate(tables):
                 csv_filename = os.path.join(OUTPUT_DIR, f"page{page_num+1}_table{t_idx+1}.csv")

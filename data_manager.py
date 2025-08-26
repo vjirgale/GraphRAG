@@ -1,15 +1,27 @@
 import os
 import shutil
 from datetime import datetime
+import numpy as np # Import numpy
 
 OUTPUT_DIR = "extracted_data"
 RECORD_FILE = os.path.join(OUTPUT_DIR, "extracted_files.txt")
+TEXT_CHUNKS_FILE = os.path.join(OUTPUT_DIR, "text_chunks.txt")
+TEXT_EMBEDDINGS_FILE = os.path.join(OUTPUT_DIR, "text_embeddings.npy")
 
 def record_extracted_files(file_list):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(RECORD_FILE, "w") as f:
         for file in file_list:
             f.write(file + "\n")
+
+def save_text_chunks_and_embeddings(text_chunks, text_embeddings):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(TEXT_CHUNKS_FILE, "w", encoding="utf-8") as f:
+        for chunk in text_chunks:
+            f.write(chunk + "\n")
+    np.save(TEXT_EMBEDDINGS_FILE, text_embeddings)
+    print(f"Saved {len(text_chunks)} text chunks to {TEXT_CHUNKS_FILE}")
+    print(f"Saved {len(text_embeddings)} text embeddings to {TEXT_EMBEDDINGS_FILE}")
 
 def delete_previous_data(backup=False):
     if os.path.exists(OUTPUT_DIR):
