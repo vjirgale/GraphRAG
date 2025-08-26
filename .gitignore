@@ -1,1 +1,6 @@
 GraphRAG/
+__pycache__/
+extracted_data/
+*.csv
+*.png
+*.jpeg
