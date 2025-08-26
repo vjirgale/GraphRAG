@@ -7,12 +7,12 @@ nltk
 sentence-transformers
 spacy
 
-# # Knowledge Graph
-# networkx
+# Knowledge Graph
+networkx
 # rdflib
 
 # # Vector Indexing and Retrieval
-# faiss-cpu
+faiss-cpu
 
 # Deep Learning and Transformers
 torch
@@ -36,6 +36,9 @@ langchain-text-splitters
 
 # # Optional: Haystack RAG framework for advanced pipelines
 # farm-haystack
+
+# For Knowledge Graph Visualization
+pyvis
 
 # # Required for camelot PDF parsing
 # opencv-python

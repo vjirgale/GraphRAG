@@ -1,6 +1,9 @@
 from PIL import Image
 from transformers import CLIPProcessor, CLIPModel, AutoTokenizer, AutoModel
 import torch
+import faiss # Import faiss
+import numpy as np # Import numpy
+import os # Import os for file existence check
 
 # For text chunking
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -65,3 +68,35 @@ def embed_text_chunks(text_content, chunk_size=TEXT_CHUNK_SIZE, chunk_overlap=TE
     embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
     
     return chunk_texts, embeddings.detach().cpu().numpy()
+
+def build_and_save_faiss_index(embeddings, filename, index_type="FlatL2"):
+    """
+    Builds a FAISS index from embeddings and saves it to a file.
+    """
+    if embeddings is None or len(embeddings) == 0:
+        print(f"No embeddings provided to build FAISS index for {filename}.")
+        return None
+
+    os.makedirs(os.path.dirname(filename) or '.', exist_ok=True) # Ensure directory exists
+    dimension = embeddings.shape[1]
+    if index_type == "FlatL2":
+        index = faiss.IndexFlatL2(dimension)
+    else:
+        raise ValueError(f"Unsupported FAISS index type: {index_type}")
+    
+    index.add(embeddings) # Add vectors to the index
+    faiss.write_index(index, filename)
+    print(f"FAISS index saved to {filename} with {index.ntotal} vectors.")
+    return index
+
+def load_faiss_index(filename):
+    """
+    Loads a FAISS index from a file.
+    """
+    if not os.path.exists(filename):
+        print(f"FAISS index file not found at {filename}.")
+        return None
+    
+    index = faiss.read_index(filename)
+    print(f"FAISS index loaded from {filename} with {index.ntotal} vectors.")
+    return index
