@@ -51,8 +51,28 @@ def process_pdf(pdf_path):
                     with open(image_filename, "wb") as img_file:
                         img_file.write(image_bytes)
                     all_images.append(image_filename)
-                    current_page_images.append(image_filename) # Add to current page images
                     extracted_files.append(image_filename)
+
+                    # --- New: Extract text near image for potential caption ---
+                    img_bbox = page.get_image_bbox(img)
+                    caption = ""
+                    # Search for text blocks that are close to the image
+                    for text_block in page.get_text("blocks"):
+                        # text_block format: (x0, y0, x1, y1, "text", block_no, block_type)
+                        text_bbox = fitz.Rect(text_block[0], text_block[1], text_block[2], text_block[3])
+                        # Check if text block is just above, below, or overlaps with image horizontally
+                        if (abs(text_bbox.y1 - img_bbox.y0) < 30 or # text above image
+                            abs(text_bbox.y0 - img_bbox.y1) < 30) and \
+                           (max(text_bbox.x0, img_bbox.x0) < min(text_bbox.x1, img_bbox.x1)): # horizontal overlap
+                            
+                            # Further refine to ensure text is "small" relative to a full paragraph
+                            # and is positioned reasonably close (e.g. within 100 units vertically)
+                            if text_bbox.height < 100 and (abs(text_bbox.y1 - img_bbox.y0) < 100 or abs(text_bbox.y0 - img_bbox.y1) < 100):
+                                caption += text_block[4] + " "
+                    
+                    current_page_images.append({'filename': image_filename, 'caption': caption.strip()})
+                    # --- End New ---
+
                 except Exception as img_err:
                     print(f"Error saving image {image_filename}: {img_err}")
 
@@ -75,7 +95,7 @@ def process_pdf(pdf_path):
             pages_data.append({
                 'page_id': page_num + 1,
                 'text': text,
-                'images': current_page_images,
+                'images': current_page_images, # This now contains dicts with filename and caption
                 'tables': current_page_tables
             })
 

@@ -3,20 +3,50 @@ import shutil
 from datetime import datetime
 import numpy as np # Import numpy
 import networkx as nx # Import networkx for KG operations
+import pickle # Import pickle for saving/loading pages_data
 
 OUTPUT_DIR = "extracted_data"
 RECORD_FILE = os.path.join(OUTPUT_DIR, "extracted_files.txt")
 TEXT_CHUNKS_FILE = "text_chunks.txt" # File for text chunks
-TEXT_EMBEDDINGS_FILE = os.path.join(OUTPUT_DIR, "text_embeddings.npy")
+TEXT_EMBEDDINGS_FILE = "text_embeddings.npy"
 DOCUMENT_KG_FILE = "document_kg.gml" # File for document-level KG
 TEXT_FAISS_INDEX_FILE = "text_faiss_index.bin" # File for text chunk FAISS index
 IMAGE_FAISS_INDEX_FILE = "image_faiss_index.bin" # File for image FAISS index
+PAGES_DATA_FILE = os.path.join(OUTPUT_DIR, "pages_data.pkl") # File for structured page data
 
 def record_extracted_files(file_list):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(RECORD_FILE, "w") as f:
         for file in file_list:
             f.write(file + "\n")
+
+def save_pages_data(pages_data):
+    """
+    Saves the structured page data to a pickle file.
+    """
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    try:
+        with open(PAGES_DATA_FILE, 'wb') as f:
+            pickle.dump(pages_data, f)
+        print(f"Saved structured page data to {PAGES_DATA_FILE}")
+    except Exception as e:
+        print(f"Error saving pages data to {PAGES_DATA_FILE}: {e}")
+
+def load_pages_data():
+    """
+    Loads the structured page data from a pickle file.
+    """
+    if not os.path.exists(PAGES_DATA_FILE):
+        print(f"Structured page data file not found at {PAGES_DATA_FILE}")
+        return None
+    try:
+        with open(PAGES_DATA_FILE, 'rb') as f:
+            pages_data = pickle.load(f)
+        print(f"Loaded structured page data from {PAGES_DATA_FILE}")
+        return pages_data
+    except Exception as e:
+        print(f"Error loading pages data from {PAGES_DATA_FILE}: {e}")
+        return None
 
 def save_text_chunks_and_embeddings(text_chunks, text_embeddings):
     os.makedirs(OUTPUT_DIR, exist_ok=True) # Ensure directory exists before saving
@@ -53,7 +83,9 @@ def save_knowledge_graph(graph, filename, graph_type="document"):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     filepath = os.path.join(OUTPUT_DIR, filename)
     try:
-        nx.write_gml(graph, filepath)
+        # Use pickle.dump for robust serialization of graph objects with complex attributes
+        with open(filepath, 'wb') as f:
+            pickle.dump(graph, f)
         print(f"Saved {graph_type} knowledge graph to {filepath}")
     except Exception as e:
         print(f"Error saving {graph_type} knowledge graph to {filepath}: {e}")
@@ -67,7 +99,9 @@ def load_knowledge_graph(filename, graph_type="document"):
         print(f"{graph_type} knowledge graph file not found at {filepath}")
         return None
     try:
-        graph = nx.read_gml(filepath)
+        # Use pickle.load for graphs saved with pickle.dump
+        with open(filepath, 'rb') as f:
+            graph = pickle.load(f)
         print(f"Loaded {graph_type} knowledge graph from {filepath}")
         return graph
     except Exception as e:

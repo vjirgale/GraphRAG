@@ -51,5 +51,5 @@ def summarize_table_with_llm(table):
     prompt = f"summarize: {decoded_table_text}" # T5 typically uses 'summarize:' prefix
     
     summarizer = pipeline("summarization", model=SUMMARIZER_MODEL, tokenizer=SUMMARIZER_TOKENIZER, device=0 if DEVICE == "cuda" else -1)
-    summary = summarizer(prompt, max_length=MAX_SUMMARY_LENGTH, min_length=MIN_SUMMARY_LENGTH, do_sample=False)[0]['summary_text']
+    summary = summarizer(prompt, min_length=MIN_SUMMARY_LENGTH, do_sample=False, max_new_tokens=MAX_SUMMARY_LENGTH)[0]['summary_text'] # Removed max_length=None
     return summary
