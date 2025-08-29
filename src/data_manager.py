@@ -109,20 +109,27 @@ def load_knowledge_graph(filename, graph_type="document"):
         return None
 
 def delete_previous_data(backup=False):
+    """
+    Deletes the output directory. If backup is True, renames the directory 
+    with a timestamp instead of deleting.
+    """
     if os.path.exists(OUTPUT_DIR):
         if backup:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_dir = f"{OUTPUT_DIR}_backup_{timestamp}"
-            shutil.move(OUTPUT_DIR, backup_dir)
-            print(f"Backed up previous data to: {backup_dir}")
-            return
-
-        # More aggressive deletion to ensure a clean slate
-        try:
-            shutil.rmtree(OUTPUT_DIR)
-            print(f"Deleted output directory and all its contents: {OUTPUT_DIR}")
-        except OSError as e:
-            print(f"Error deleting output directory {OUTPUT_DIR}: {e}")
-
+            try:
+                shutil.move(OUTPUT_DIR, backup_dir)
+                print(f"Backed up previous data to: {backup_dir}")
+            except Exception as e:
+                print(f"Error backing up data: {e}")
+        else:
+            try:
+                shutil.rmtree(OUTPUT_DIR)
+                print(f"Deleted output directory and all its contents: {OUTPUT_DIR}")
+            except OSError as e:
+                print(f"Error deleting directory {OUTPUT_DIR}: {e}")
     else:
-        print("No previous extracted data directory found.")
+        print("No previous extracted data directory found to delete.")
+    
+    # Always ensure the output directory exists for the new run
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
