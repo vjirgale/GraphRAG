@@ -46,172 +46,78 @@ def load_retrieval_assets():
     DOCUMENT_KG = load_knowledge_graph(DOCUMENT_KG_FILE, graph_type="document")
     RAG_DOCUMENT_KG = DOCUMENT_KG # Assign to RAG_DOCUMENT_KG for external access
 
-def retrieve_context(query_embedding, top_k=3):
+def retrieve_context(query_embedding, top_k=5):
     """
-    Retrieves top_k most relevant text chunks based on query embedding, 
-    then expands context using the knowledge graph.
+    Retrieves top_k most relevant text chunks and expands context to include all 
+    text, images, and tables from the same pages.
     """
-    if TEXT_FAISS_INDEX is None or RAG_DOCUMENT_KG is None:
+    if TEXT_FAISS_INDEX is None or DOCUMENT_KG is None:
         print("FAISS index or Document KG not loaded. Please call load_retrieval_assets() first.")
         return []
-    
-    # Reshape query_embedding for FAISS (batch size 1)
+
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
+    _, indices = TEXT_FAISS_INDEX.search(query_embedding, top_k)
     
-    # Search the text FAISS index
-    distances, indices = TEXT_FAISS_INDEX.search(query_embedding, top_k)
-    
-    retrieved_chunks_structured = []
+    retrieved_pages = set()
+    # First, gather all retrieved text chunks
+    retrieved_chunks = []
     for i in indices[0]:
         if i < len(LOADED_TEXT_CHUNKS):
-            retrieved_chunks_structured.append({'type': 'text', 'content': LOADED_TEXT_CHUNKS[i]})
-
-    print(f"DEBUG: Initial retrieved chunks: {retrieved_chunks_structured}") # Debug print
-
-    # --- New: Knowledge Graph Expansion ---
-    kg_context_structured = [] # Use a list of dicts to store structured context
-    # Extract entities from the retrieved text chunks and the query for KG traversal
-    all_text_for_entity_extraction = " ".join([chunk['content'] for chunk in retrieved_chunks_structured]) + " " # Append query to the text
-    query_doc = nlp(all_text_for_entity_extraction) # Use nlp from kg_manager for consistency
+            chunk_content = LOADED_TEXT_CHUNKS[i]
+            retrieved_chunks.append(chunk_content)
+            # Find the page associated with the chunk
+            for node, data in DOCUMENT_KG.nodes(data=True):
+                if data.get('type') == 'text_chunk' and data.get('content') == chunk_content:
+                    if 'page' in data:
+                        retrieved_pages.add(data['page'])
+                    break
     
-    # Add query entities
-    query_entities = [ent.text for ent in query_doc.ents]
+    final_context = []
+    # Add the text chunks that were directly retrieved
+    for chunk in retrieved_chunks:
+        final_context.append({'type': 'text', 'content': chunk})
+
+    # Then, add all tables from the pages where chunks were found
+    for page_id in retrieved_pages:
+        page_node_id = f"Page_{page_id}"
+        if DOCUMENT_KG.has_node(page_node_id):
+            for neighbor in DOCUMENT_KG.neighbors(page_node_id):
+                node_data = DOCUMENT_KG.nodes[neighbor]
+                if node_data.get('type') == 'table':
+                    # Serialize the full table data to be included in the context
+                    table_content = node_data.get('data', [])
+                    if table_content:
+                        # Convert table to a simple string format for the context
+                        table_str = "\n".join([",".join(map(str, row)) for row in table_content])
+                        final_context.append({'type': 'table', 'content': table_str, 'page': page_id})
     
-    entities_to_explore = set(query_entities) # Start with entities from the query
-    print(f"DEBUG: Entities to explore (from query): {entities_to_explore}") # Debug print
-
-    # Add entities from retrieved chunks
-    for chunk in retrieved_chunks_structured:
-        chunk_entities, _ = extract_entities_and_relations(chunk['content'])
-        for entity, _ in chunk_entities:
-            entities_to_explore.add(entity)
-    print(f"DEBUG: All entities to explore: {entities_to_explore}") # Debug print
-
-    # Traverse the knowledge graph for related information
-    for entity_name in list(entities_to_explore):
-        print(f"DEBUG: Exploring entity: {entity_name}") # Debug print
-        # Canonicalize entity name for lookup in KG nodes
-        canonical_entity_name = str(entity_name).lower().strip()
-        
-        # Find the actual node in the KG that matches the canonical name
-        matched_kg_node = None
-        for kg_node in RAG_DOCUMENT_KG.nodes(): # Use RAG_DOCUMENT_KG
-            if str(kg_node).lower().strip() == canonical_entity_name:
-                matched_kg_node = kg_node
-                break
-        
-        if matched_kg_node: # If a matching node is found
-            print(f"DEBUG: Matched KG node: {matched_kg_node}") # Debug print
-            # --- Refined KG traversal logic ---
-            # Add node attributes as context, prioritizing more meaningful content
-            node_attributes = RAG_DOCUMENT_KG.nodes[matched_kg_node]
-            node_type = node_attributes.get('type', 'entity')
-            node_reference_type = node_attributes.get('reference_type', node_type)
-
-            # Add the main entity node's value itself if it's descriptive
-            if node_type == 'entity' and len(str(matched_kg_node).strip().split()) > 1: # Avoid single-word generic entities
-                context_item = {'type': 'text', 'content': str(matched_kg_node).strip(), 'reference_type': node_reference_type}
-                if not _is_context_item_duplicate(context_item, kg_context_structured):
-                    kg_context_structured.append(context_item)
-                    print(f"DEBUG: Added entity context: {context_item}") # Debug print
-
-            if node_type == 'image':
-                filename = node_attributes.get('filename')
-                caption = node_attributes.get('caption')
-                if filename and caption:
-                    context_item = {'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': node_reference_type}
-                    if not _is_context_item_duplicate(context_item, kg_context_structured):
-                        kg_context_structured.append(context_item)
-                        print(f"DEBUG: Added image context: {context_item}") # Debug print
-            elif node_type == 'table':
-                summary = node_attributes.get('summary')
-                if summary:
-                    context_item = {'type': 'table', 'content': summary, 'reference_type': node_reference_type}
-                    if not _is_context_item_duplicate(context_item, kg_context_structured):
-                        kg_context_structured.append(context_item)
-                        print(f"DEBUG: Added table context (summary): {context_item}") # Debug print
-                elif node_attributes.get('data'): # If no summary but data exists, use a generic table reference
-                    context_item = {'type': 'table', 'content': f"Table: {str(matched_kg_node)}", 'reference_type': node_reference_type}
-                    if not _is_context_item_duplicate(context_item, kg_context_structured):
-                        kg_context_structured.append(context_item)
-                        print(f"DEBUG: Added table context (data): {context_item}") # Debug print
-                else: # Default to text/entity type for other descriptive attributes
-                    for attr, value in node_attributes.items():
-                        if attr != 'page' and isinstance(value, str) and value.strip():
-                            context_item = {'type': 'text', 'content': value.strip(), 'reference_type': node_reference_type}
-                            if not _is_context_item_duplicate(context_item, kg_context_structured):
-                                kg_context_structured.append(context_item)
-                                print(f"DEBUG: Added generic text context from node attributes: {context_item}") # Debug print
-
-            # Explore neighbors and predecessors (1-hop traversal for now)
-            for connected_node in list(RAG_DOCUMENT_KG.neighbors(matched_kg_node)) + list(RAG_DOCUMENT_KG.predecessors(matched_kg_node)):
-                print(f"DEBUG: Exploring connected node: {connected_node}") # Debug print
-                connected_node_attributes = RAG_DOCUMENT_KG.nodes[connected_node]
-                connected_node_type = connected_node_attributes.get('type', 'entity')
-                connected_node_reference_type = connected_node_attributes.get('reference_type', connected_node_type)
-
-                if connected_node_type == 'image':
-                    filename = connected_node_attributes.get('filename')
-                    caption = connected_node_attributes.get('caption')
-                    if filename and caption:
-                        context_item = {'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': connected_node_reference_type}
-                        if not _is_context_item_duplicate(context_item, kg_context_structured):
-                            kg_context_structured.append(context_item)
-                            print(f"DEBUG: Added connected image context: {context_item}") # Debug print
-                elif connected_node_type == 'table':
-                    summary = connected_node_attributes.get('summary')
-                    if summary:
-                        context_item = {'type': 'table', 'content': summary, 'reference_type': connected_node_reference_type}
-                        if not _is_context_item_duplicate(context_item, kg_context_structured):
-                             kg_context_structured.append(context_item)
-                             print(f"DEBUG: Added connected table context (summary): {context_item}") # Debug print
-                    elif connected_node_attributes.get('data'): # Fallback
-                        context_item = {'type': 'table', 'content': f"Table: {str(connected_node)}", 'reference_type': connected_node_reference_type}
-                        if not _is_context_item_duplicate(context_item, kg_context_structured):
-                             kg_context_structured.append(context_item)
-                             print(f"DEBUG: Added connected table context (data): {context_item}") # Debug print
-                    else: # Default to text/entity type
-                        if len(str(connected_node).strip().split()) > 1:
-                            context_item = {'type': 'text', 'content': str(connected_node).strip(), 'reference_type': connected_node_reference_type}
-                            if not _is_context_item_duplicate(context_item, kg_context_structured):
-                                kg_context_structured.append(context_item)
-                                print(f"DEBUG: Added connected text context: {context_item}") # Debug print
-                        for attr, value in connected_node_attributes.items():
-                            if attr != 'page' and isinstance(value, str) and value.strip():
-                                context_item = {'type': 'text', 'content': value.strip(), 'reference_type': connected_node_reference_type}
-                                if not _is_context_item_duplicate(context_item, kg_context_structured):
-                                    kg_context_structured.append(context_item)
-                                    print(f"DEBUG: Added connected generic text context from node attributes: {context_item}") # Debug print
-
-                    # Add edge data as text context if descriptive
-                    edge_data_list = RAG_DOCUMENT_KG.get_edge_data(matched_kg_node, connected_node, default={}) # Handle potential non-existent edge for MultiDiGraph
-                    if isinstance(edge_data_list, dict): # For MultiDiGraph, get_edge_data returns a dict of edge keys to data
-                        for key in edge_data_list:
-                            relation_value = edge_data_list[key].get('relation')
-                            if relation_value and relation_value.strip():
-                                context_item = {'type': 'text', 'content': relation_value.strip(), 'reference_type': 'relation'}
-                                if not _is_context_item_duplicate(context_item, kg_context_structured):
-                                    kg_context_structured.append(context_item)
-                                    print(f"DEBUG: Added edge context: {context_item}") # Debug print
-
-    print(f"DEBUG: KG-expanded context: {kg_context_structured}") # Debug print
-
-    # Combine original retrieved text chunks with KG-expanded structured context
-    final_retrieved_context = retrieved_chunks_structured + kg_context_structured
-    
-    return final_retrieved_context
+    return final_context
 
 def generate_answer(query, retrieved_context):
     """
     Generates an answer using the RAG model based on the query and retrieved context.
     """
-    # Prepare context for the LLM, potentially adding structure
-    context_str = "\n".join([f"[Context {i+1}]: {c}" for i, c in enumerate(retrieved_context)])
+    # Format the structured context into a readable string for the LLM
+    context_parts = []
+    for i, item in enumerate(retrieved_context):
+        item_type = item.get('type')
+        content = ""
+        if item_type == 'text':
+            content = item.get('content', '')
+        elif item_type == 'image':
+            content = f"Image Reference: {item.get('filename')}, Caption: {item.get('caption', 'N/A')}"
+        elif item_type == 'table':
+            content = item.get('content', '')
+
+        context_parts.append(f"[Context {i+1} ({item_type})]: {content}")
+    
+    context_str = "\n".join(context_parts)
     
     # Construct the prompt for the LLM
     prompt = (
         f"You are an AI assistant tasked with answering questions based on the provided document context.\n"
         f"Read the context carefully and provide a concise and accurate answer to the question.\n"
+        f"Pay close attention to units of measurement (e.g., m, kg, ft) mentioned in the context and provide the answer in the same units.\n"
         f"If the answer is not available in the context, state that you cannot find the answer.\n"
         f"Question: {query}\n"
         f"Context:\n{context_str}\n"
@@ -224,10 +130,10 @@ def generate_answer(query, retrieved_context):
         outputs = RAG_MODEL.generate(
             inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            max_new_tokens=200, # Increased max_new_tokens for potentially longer answers
-            num_beams=5,        # Increased num_beams for potentially better quality answers
+            max_new_tokens=200,
+            num_beams=5,
             early_stopping=True,
-            max_length=None # Explicitly set max_length to None to avoid warning
+            max_length=None
         )
         
     answer = RAG_TOKENIZER.decode(outputs[0], skip_special_tokens=True)

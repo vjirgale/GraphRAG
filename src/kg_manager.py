@@ -55,74 +55,50 @@ def table_to_graph_triples(table_data, page_id=None, table_id=None):
 
     return triples
 
-def build_page_kg(page_id, text, images, tables):
+def build_page_kg(page_id, text_chunks, images, tables):
     """
-    Builds a knowledge graph for a single page.
+    Builds a knowledge graph for a single page from its text chunks, images, and tables.
     """
     page_kg = nx.MultiDiGraph()
+    page_node_id = f"Page_{page_id}"
+    page_kg.add_node(page_node_id, type='page', page_number=page_id)
 
-    # Add text entities and relations
-    entities, relations = extract_entities_and_relations(text)
-    for entity, label in entities:
-        page_kg.add_node(entity, type='entity', label=label, page=page_id)
-    for s, p, o in relations:
-        page_kg.add_edge(s, o, relation=p, page=page_id)
+    # Process each text chunk
+    for chunk_idx, chunk in enumerate(text_chunks):
+        chunk_node_id = f"Page_{page_id}_Chunk_{chunk_idx+1}"
+        page_kg.add_node(chunk_node_id, type='text_chunk', page=page_id, content=chunk)
+        page_kg.add_edge(page_node_id, chunk_node_id, relation='has_chunk')
 
-    # Add table data
-    for t_idx, table_data_entry in enumerate(tables):
-        print(f"DEBUG kg_manager: Processing table_data_entry type: {type(table_data_entry)}")
-        print(f"DEBUG kg_manager: Processing table_data_entry content: {table_data_entry}")
-        original_table_data = table_data_entry['data']
-        table_summary = table_data_entry['summary']
-        
-        table_triples = table_to_graph_triples(original_table_data, page_id, t_idx+1)
-        
-        # Create a main node for the table itself, with its summary as an attribute
+        entities, relations = extract_entities_and_relations(chunk)
+        for entity, label in entities:
+            if not page_kg.has_node(entity):
+                page_kg.add_node(entity, type='entity', label=label, pages=[page_id])
+            elif 'pages' in page_kg.nodes[entity] and page_id not in page_kg.nodes[entity]['pages']:
+                page_kg.nodes[entity]['pages'].append(page_id)
+            page_kg.add_edge(chunk_node_id, entity, relation='mentions')
+
+        for s, p, o in relations:
+            page_kg.add_edge(s, o, relation=p, page=page_id, chunk=chunk_idx+1)
+
+    # Add table data, linking to the page
+    for t_idx, table_data in enumerate(tables):
         table_node_id = f"Table_{page_id}_{t_idx+1}"
-        # Serialize original_table_data to a JSON string before storing
-        serialized_table_data = json.dumps(original_table_data)
-        page_kg.add_node(table_node_id, type='table', page=page_id, summary=table_summary, data=serialized_table_data, reference_type='Table') # Store summary and serialized data, add reference_type
-
-        # Link table triples to the main table node
-        for s, p, o in table_triples:
-            # Ensure nodes exist before adding edges
-            # If subject/object is a simple string, it might be an entity or value
-            # If it's the subject_base from table_to_graph_triples, link it to the main table node
-            if s.startswith(f"Table_{page_id}_{t_idx+1}_Row_"):
-                if s not in page_kg: page_kg.add_node(s, type='subject', page=page_id, table_id=table_node_id, reference_type='Table Row')
-                page_kg.add_edge(table_node_id, s, relation='contains_row')
-            else:
-                if s not in page_kg: page_kg.add_node(s, type='subject', page=page_id)
-            
-            if o not in page_kg: page_kg.add_node(o, type='object', page=page_id)
-            page_kg.add_edge(s, o, relation=p, page=page_id)
-
-    # Integrate image data (captions)
-    for img_data in images:
-        image_filename = img_data['filename']
-        image_caption = img_data['caption']
-
-        # Add image node with caption as an attribute, and reference_type
-        # Use a more descriptive node ID that explicitly states "Figure"
-        figure_node_id = f"Figure_{os.path.basename(image_filename)}"
-        page_kg.add_node(figure_node_id, type='image', page=page_id, caption=image_caption, filename=image_filename, reference_type='Figure')
         
-        if image_caption: # Process caption if it exists
-            caption_entities, caption_relations = extract_entities_and_relations(image_caption)
-            for entity, label in caption_entities:
-                # Add caption entities, linking them to the image
-                page_kg.add_node(entity, type='entity', label=label, page=page_id)
-                page_kg.add_edge(figure_node_id, entity, relation='describes_figure') # Image describes entity, updated relation
+        # Create a reference string from the header and first column
+        reference = ""
+        if table_data and isinstance(table_data, list) and len(table_data) > 0:
+            header = " | ".join(map(str, table_data[0]))
+            first_col = " | ".join([str(row[0]) for row in table_data[1:] if row])
+            reference = f"Header: {header}, Context: {first_col}"
 
-                # Attempt to link caption entity to text entities on the same page
-                # This is a basic form of cross-modal linking
-                for text_entity, text_label in entities: # 'entities' are from page text
-                    if entity.lower() in text_entity.lower() or text_entity.lower() in entity.lower():
-                        page_kg.add_edge(entity, text_entity, relation='appears_in_text_and_figure') # Updated relation
+        page_kg.add_node(table_node_id, type='table', page=page_id, reference=reference, data=table_data)
+        page_kg.add_edge(page_node_id, table_node_id, relation='has_table')
 
-            for s, p, o in caption_relations:
-                # Add relations found within the caption
-                page_kg.add_edge(s, o, relation=f'{p}_in_figure', page=page_id) # Updated relation
+    # Add image data, linking to the page
+    for img_idx, img_data in enumerate(images):
+        image_node_id = f"Image_{page_id}_{img_idx+1}"
+        page_kg.add_node(image_node_id, type='image', page=page_id, **img_data)
+        page_kg.add_edge(page_node_id, image_node_id, relation='has_image')
 
     return page_kg
 

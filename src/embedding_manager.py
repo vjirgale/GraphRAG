@@ -20,7 +20,7 @@ clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(DEVICE
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 # Initialize text embedding model
-text_tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+text_tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2", use_fast=True)
 text_model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2").to(DEVICE)
 
 def embed_image(image_filename):
@@ -35,22 +35,14 @@ def embed_image(image_filename):
         image_features = clip_model.get_image_features(**inputs).detach().cpu().numpy()
     return image_features
 
-def embed_text_chunks(text_content, chunk_size=TEXT_CHUNK_SIZE, chunk_overlap=TEXT_CHUNK_OVERLAP):
+def embed_text_chunks(chunk_texts):
     """
-    Chunks text content and generates sentence embeddings for each chunk.
-    :param text_content: The full text content to chunk and embed.
-    :param chunk_size: The maximum size of each text chunk.
-    :param chunk_overlap: The overlap between consecutive text chunks.
-    :return: A tuple of (list of chunk texts, numpy array of embeddings).
+    Generates sentence embeddings for a list of text chunks.
+    :param chunk_texts: A list of chunk texts to embed.
+    :return: A numpy array of embeddings.
     """
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
-        is_separator_regex=False,
-    )
-    chunks = text_splitter.create_documents([text_content])
-    chunk_texts = [chunk.page_content for chunk in chunks]
+    if not chunk_texts or not isinstance(chunk_texts, list):
+        return np.array([])
 
     # Generate embeddings for text chunks
     encoded_input = text_tokenizer(chunk_texts, padding=True, truncation=True, return_tensors='pt').to(DEVICE)
@@ -67,7 +59,7 @@ def embed_text_chunks(text_content, chunk_size=TEXT_CHUNK_SIZE, chunk_overlap=TE
     # Normalize embeddings
     embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
     
-    return chunk_texts, embeddings.detach().cpu().numpy()
+    return embeddings.detach().cpu().numpy()
 
 def build_and_save_faiss_index(embeddings, filename, index_type="FlatL2"):
     """

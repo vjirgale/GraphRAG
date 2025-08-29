@@ -40,6 +40,9 @@ langchain-text-splitters
 # For Knowledge Graph Visualization
 pyvis
 
+# For PDF generation
+reportlab
+
 # # Required for camelot PDF parsing
 # opencv-python
 
