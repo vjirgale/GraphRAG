@@ -170,7 +170,7 @@ def run_rag_interactive_loop():
 
         # Retrieve context
         start_retrieve_context = time.time()
-        retrieved_context = src.rag_pipeline.retrieve_context(query_embedding)
+        retrieved_context = src.rag_pipeline.retrieve_context(query, query_embedding)
         end_retrieve_context = time.time()
         print(f"DEBUG main.py: Context retrieval time: {end_retrieve_context - start_retrieve_context:.2f} seconds")
 
@@ -261,10 +261,13 @@ if __name__ == "__main__":
 
     if args.extract_process_data:
         extract_and_process_data(args)
-    elif args.run_rag:
+    
+    if args.run_rag:
         run_rag_pipeline_func()
-    elif args.visualize_kg:
+    
+    if args.visualize_kg:
         run_kg_visualization_func()
-    else:
+
+    if not args.extract_process_data and not args.run_rag and not args.visualize_kg:
         parser.print_help()
         print("\nNo action specified. Please use --extract-process-data, --run-rag, or --visualize-kg.")

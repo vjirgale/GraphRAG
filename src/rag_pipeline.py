@@ -46,7 +46,7 @@ def load_retrieval_assets():
     DOCUMENT_KG = load_knowledge_graph(DOCUMENT_KG_FILE, graph_type="document")
     RAG_DOCUMENT_KG = DOCUMENT_KG # Assign to RAG_DOCUMENT_KG for external access
 
-def retrieve_context(query_embedding, top_k=5):
+def retrieve_context(query, query_embedding, top_k=10):
     """
     Retrieves top_k most relevant text chunks and expands context to include all 
     text, images, and tables from the same pages.
@@ -55,16 +55,31 @@ def retrieve_context(query_embedding, top_k=5):
         print("FAISS index or Document KG not loaded. Please call load_retrieval_assets() first.")
         return []
 
+    # Extract entities from the query to refine search
+    doc = nlp(query)
+    query_entities = [ent.text for ent in doc.ents]
+    
+    # Also extract potential model names/identifiers using simple pattern matching
+    import re
+    model_patterns = re.findall(r'S\d+[A-Z]*', query, re.IGNORECASE)
+    query_entities.extend(model_patterns)
+    
+    # Extract key terms related to capacity, height, weight, etc.
+    capacity_terms = ['capacity', 'lift', 'load', 'weight', 'height', 'platform']
+    query_terms = [term for term in capacity_terms if term.lower() in query.lower()]
+
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
-    _, indices = TEXT_FAISS_INDEX.search(query_embedding, top_k)
+    _, indices = TEXT_FAISS_INDEX.search(query_embedding, top_k * 2)  # Get more candidates initially
     
     retrieved_pages = set()
-    # First, gather all retrieved text chunks
     retrieved_chunks = []
+    
+    # First pass: collect all potential chunks from FAISS search
     for i in indices[0]:
         if i < len(LOADED_TEXT_CHUNKS):
             chunk_content = LOADED_TEXT_CHUNKS[i]
             retrieved_chunks.append(chunk_content)
+            
             # Find the page associated with the chunk
             for node, data in DOCUMENT_KG.nodes(data=True):
                 if data.get('type') == 'text_chunk' and data.get('content') == chunk_content:
@@ -72,24 +87,69 @@ def retrieve_context(query_embedding, top_k=5):
                         retrieved_pages.add(data['page'])
                     break
     
-    final_context = []
-    # Add the text chunks that were directly retrieved
+    # Second pass: if we have specific model entities, ensure we include relevant chunks for those models
+    if query_entities:
+        for chunk in LOADED_TEXT_CHUNKS:
+            if chunk not in retrieved_chunks:
+                # Check if this chunk contains the specific model and relevant terms
+                has_model = any(entity.upper() in chunk.upper() for entity in query_entities if entity)
+                has_capacity_term = any(term.lower() in chunk.lower() for term in query_terms)
+                
+                if has_model and has_capacity_term:
+                    retrieved_chunks.append(chunk)
+                    # Find the page associated with the chunk
+                    for node, data in DOCUMENT_KG.nodes(data=True):
+                        if data.get('type') == 'text_chunk' and data.get('content') == chunk:
+                            if 'page' in data:
+                                retrieved_pages.add(data['page'])
+                            break
+    
+    # Third pass: prioritize chunks that contain the specific model and relevant terms
+    prioritized_chunks = []
+    other_chunks = []
+    
     for chunk in retrieved_chunks:
+        has_model = any(entity.upper() in chunk.upper() for entity in query_entities if entity)
+        has_capacity_term = any(term.lower() in chunk.lower() for term in query_terms)
+        
+        if has_model and has_capacity_term:
+            prioritized_chunks.append(chunk)
+        elif has_model or has_capacity_term:
+            other_chunks.append(chunk)
+        elif len(chunk) > 20:  # Keep longer descriptive chunks
+            other_chunks.append(chunk)
+    
+    # Combine prioritized chunks first, then others, up to top_k
+    final_chunks = prioritized_chunks + other_chunks
+    final_chunks = final_chunks[:top_k]
+    
+    final_context = []
+    
+    # Add the text chunks
+    for chunk in final_chunks:
         final_context.append({'type': 'text', 'content': chunk})
 
-    # Then, add all tables from the pages where chunks were found
+    # Add relevant tables from the pages where chunks were found
     for page_id in retrieved_pages:
         page_node_id = f"Page_{page_id}"
         if DOCUMENT_KG.has_node(page_node_id):
             for neighbor in DOCUMENT_KG.neighbors(page_node_id):
                 node_data = DOCUMENT_KG.nodes[neighbor]
                 if node_data.get('type') == 'table':
-                    # Serialize the full table data to be included in the context
                     table_content = node_data.get('data', [])
                     if table_content:
                         # Convert table to a simple string format for the context
                         table_str = "\n".join([",".join(map(str, row)) for row in table_content])
-                        final_context.append({'type': 'table', 'content': table_str, 'page': page_id})
+                        
+                        # Include table if it contains any query entity or relevant terms
+                        should_include = False
+                        if query_entities:
+                            should_include = any(entity.upper() in table_str.upper() for entity in query_entities if entity)
+                        if not should_include and query_terms:
+                            should_include = any(term.lower() in table_str.lower() for term in query_terms)
+                        
+                        if should_include:
+                            final_context.append({'type': 'table', 'content': table_str, 'page': page_id})
     
     return final_context
 
@@ -117,7 +177,13 @@ def generate_answer(query, retrieved_context):
     prompt = (
         f"You are an AI assistant tasked with answering questions based on the provided document context.\n"
         f"Read the context carefully and provide a concise and accurate answer to the question.\n"
-        f"Pay close attention to units of measurement (e.g., m, kg, ft) mentioned in the context and provide the answer in the same units.\n"
+        f"Pay close attention to:\n"
+        f"1. The specific model or item mentioned in the question (e.g., S2632E, S2646E)\n"
+        f"2. The specific attribute being asked about (e.g., lift capacity, platform height, weight)\n"
+        f"3. Units of measurement (e.g., m, kg, ft) mentioned in the context\n"
+        f"4. Match the model name with the correct attribute value from tables or text\n"
+        f"If the context contains a table, look for the row that matches the model and the column that matches the attribute.\n"
+        f"For 'lift capacity' or 'capacity' questions, look for 'Platform Capacity' or similar terms in the data.\n"
         f"If the answer is not available in the context, state that you cannot find the answer.\n"
         f"Question: {query}\n"
         f"Context:\n{context_str}\n"
@@ -158,10 +224,11 @@ if __name__ == "__main__":
         sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
         query_embedding = (sum_embeddings / sum_mask).detach().cpu().numpy()
         
-        retrieved_context = retrieve_context(query_embedding)
+        retrieved_context = retrieve_context(test_query, query_embedding)
         print("\nRetrieved Context:")
-        for i, chunk in enumerate(retrieved_context):
-            print(f"- Chunk {i+1}: {chunk[:200]}...") # Print first 200 chars
+        for i, item in enumerate(retrieved_context):
+            content_str = str(item.get('content', ''))
+            print(f"- Item {i+1} (type: {item.get('type')}): {content_str[:200]}...") # Print first 200 chars
             
         answer = generate_answer(test_query, retrieved_context)
         print(f"\nGenerated Answer: {answer}")

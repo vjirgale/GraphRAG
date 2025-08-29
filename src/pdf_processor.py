@@ -97,3 +97,40 @@ def process_pdf(pdf_path, chunk_size=500, overlap=50):
 
     record_extracted_files(extracted_files)
     return pages_data, all_images, all_tables
+
+def add_table_to_graph(graph, table_data, page_num, doc_path):
+    """Adds a table node to the graph and connects it to the relevant page."""
+    if not table_data:
+        return
+    
+    table_id = f"table_{page_num}_{doc_path}"
+    # Add the table with its data and page number
+    graph.add_node(table_id, type='table', data=table_data, page=page_num, source_doc=doc_path)
+    
+    # Connect table to its page
+    page_node_id = f"Page_{page_num}"
+    if not graph.has_node(page_node_id):
+        graph.add_node(page_node_id, type='page', page_number=page_num, source_doc=doc_path)
+    graph.add_edge(page_node_id, table_id, type='contains_table')
+
+def add_image_to_graph(graph, image_path, page_num, doc_path):
+    """Adds an image node to the graph and connects it to the relevant page."""
+    image_id = f"image_{page_num}_{os.path.basename(image_path)}"
+    graph.add_node(image_id, type='image', path=image_path, page=page_num, source_doc=doc_path)
+    
+    # Connect image to its page
+    page_node_id = f"Page_{page_num}"
+    if not graph.has_node(page_node_id):
+        graph.add_node(page_node_id, type='page', page_number=page_num, source_doc=doc_path)
+    graph.add_edge(page_node_id, image_id, type='contains_image')
+
+def add_text_chunk_to_graph(graph, chunk, page_num, doc_path):
+    """Adds a text chunk node to the graph and connects it to the relevant page."""
+    chunk_id = f"chunk_{page_num}_{hash(chunk)}_{doc_path}"
+    graph.add_node(chunk_id, type='text_chunk', content=chunk, page=page_num, source_doc=doc_path)
+    
+    # Connect text chunk to its page
+    page_node_id = f"Page_{page_num}"
+    if not graph.has_node(page_node_id):
+        graph.add_node(page_node_id, type='page', page_number=page_num, source_doc=doc_path)
+    graph.add_edge(page_node_id, chunk_id, type='contains_text')
