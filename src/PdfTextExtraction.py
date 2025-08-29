@@ -1,8 +1,8 @@
 import argparse
-from .pdf_processor import process_pdf
-from .data_manager import delete_previous_data
-from .embedding_manager import embed_image
-from .summarizer import summarize_table_with_llm
+from src.pdf_processor import process_pdf
+from src.data_manager import delete_previous_data
+from src.embedding_manager import embed_image
+from src.summarizer import summarize_table_with_llm
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PDF Extraction and Processing")

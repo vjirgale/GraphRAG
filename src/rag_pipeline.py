@@ -5,9 +5,9 @@ import numpy as np
 import os
 
 # Import necessary modules from your project
-from embedding_manager import embed_text_chunks, load_faiss_index
-from data_manager import TEXT_CHUNKS_FILE, TEXT_FAISS_INDEX_FILE, OUTPUT_DIR, load_text_chunks, DOCUMENT_KG_FILE, load_knowledge_graph # Import DOCUMENT_KG_FILE and load_knowledge_graph
-from kg_manager import extract_entities_and_relations, nlp # Import extract_entities_and_relations and nlp
+from src.embedding_manager import embed_text_chunks, load_faiss_index
+from src.data_manager import TEXT_CHUNKS_FILE, TEXT_FAISS_INDEX_FILE, OUTPUT_DIR, load_text_chunks, DOCUMENT_KG_FILE, load_knowledge_graph # Import DOCUMENT_KG_FILE and load_knowledge_graph
+from src.kg_manager import extract_entities_and_relations, nlp # Import extract_entities_and_relations and nlp
 
 # --- RAG Model Initialization ---
 # Using google/flan-t5-small for demonstration due to its smaller size and good performance
@@ -26,6 +26,13 @@ TEXT_FAISS_INDEX = None
 LOADED_TEXT_CHUNKS = []
 DOCUMENT_KG = None # Global variable for the document KG
 RAG_DOCUMENT_KG = None # Expose DOCUMENT_KG to main.py
+
+def _is_context_item_duplicate(item, context_list):
+    """Helper function to check if a context item (dict) already exists in a list based on content."""
+    for existing_item in context_list:
+        if item == existing_item: # Dictionary comparison checks for equality of content
+            return True
+    return False
 
 def load_retrieval_assets():
     global TEXT_FAISS_INDEX, LOADED_TEXT_CHUNKS, DOCUMENT_KG, RAG_DOCUMENT_KG
@@ -59,25 +66,30 @@ def retrieve_context(query_embedding, top_k=3):
         if i < len(LOADED_TEXT_CHUNKS):
             retrieved_chunks_structured.append({'type': 'text', 'content': LOADED_TEXT_CHUNKS[i]})
 
+    print(f"DEBUG: Initial retrieved chunks: {retrieved_chunks_structured}") # Debug print
+
     # --- New: Knowledge Graph Expansion ---
     kg_context_structured = [] # Use a list of dicts to store structured context
     # Extract entities from the retrieved text chunks and the query for KG traversal
     all_text_for_entity_extraction = " ".join([chunk['content'] for chunk in retrieved_chunks_structured]) + " " # Append query to the text
     query_doc = nlp(all_text_for_entity_extraction) # Use nlp from kg_manager for consistency
-
+    
     # Add query entities
     query_entities = [ent.text for ent in query_doc.ents]
     
     entities_to_explore = set(query_entities) # Start with entities from the query
+    print(f"DEBUG: Entities to explore (from query): {entities_to_explore}") # Debug print
 
     # Add entities from retrieved chunks
     for chunk in retrieved_chunks_structured:
         chunk_entities, _ = extract_entities_and_relations(chunk['content'])
         for entity, _ in chunk_entities:
             entities_to_explore.add(entity)
+    print(f"DEBUG: All entities to explore: {entities_to_explore}") # Debug print
 
     # Traverse the knowledge graph for related information
     for entity_name in list(entities_to_explore):
+        print(f"DEBUG: Exploring entity: {entity_name}") # Debug print
         # Canonicalize entity name for lookup in KG nodes
         canonical_entity_name = str(entity_name).lower().strip()
         
@@ -89,6 +101,7 @@ def retrieve_context(query_embedding, top_k=3):
                 break
         
         if matched_kg_node: # If a matching node is found
+            print(f"DEBUG: Matched KG node: {matched_kg_node}") # Debug print
             # --- Refined KG traversal logic ---
             # Add node attributes as context, prioritizing more meaningful content
             node_attributes = RAG_DOCUMENT_KG.nodes[matched_kg_node]
@@ -97,30 +110,42 @@ def retrieve_context(query_embedding, top_k=3):
 
             # Add the main entity node's value itself if it's descriptive
             if node_type == 'entity' and len(str(matched_kg_node).strip().split()) > 1: # Avoid single-word generic entities
-                if {'type': 'text', 'content': str(matched_kg_node).strip(), 'reference_type': node_reference_type} not in kg_context_structured:
-                    kg_context_structured.append({'type': 'text', 'content': str(matched_kg_node).strip(), 'reference_type': node_reference_type})
+                context_item = {'type': 'text', 'content': str(matched_kg_node).strip(), 'reference_type': node_reference_type}
+                if not _is_context_item_duplicate(context_item, kg_context_structured):
+                    kg_context_structured.append(context_item)
+                    print(f"DEBUG: Added entity context: {context_item}") # Debug print
 
             if node_type == 'image':
                 filename = node_attributes.get('filename')
                 caption = node_attributes.get('caption')
                 if filename and caption:
-                    if {'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': node_reference_type} not in kg_context_structured:
-                        kg_context_structured.append({'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': node_reference_type})
+                    context_item = {'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': node_reference_type}
+                    if not _is_context_item_duplicate(context_item, kg_context_structured):
+                        kg_context_structured.append(context_item)
+                        print(f"DEBUG: Added image context: {context_item}") # Debug print
             elif node_type == 'table':
                 summary = node_attributes.get('summary')
                 if summary:
-                    if {'type': 'table', 'content': summary, 'reference_type': node_reference_type} not in kg_context_structured:
-                        kg_context_structured.append({'type': 'table', 'content': summary, 'reference_type': node_reference_type})
+                    context_item = {'type': 'table', 'content': summary, 'reference_type': node_reference_type}
+                    if not _is_context_item_duplicate(context_item, kg_context_structured):
+                        kg_context_structured.append(context_item)
+                        print(f"DEBUG: Added table context (summary): {context_item}") # Debug print
                 elif node_attributes.get('data'): # If no summary but data exists, use a generic table reference
-                    if {'type': 'table', 'content': f"Table: {str(matched_kg_node)}", 'reference_type': node_reference_type} not in kg_context_structured:
-                        kg_context_structured.append({'type': 'table', 'content': f"Table: {str(matched_kg_node)}", 'reference_type': node_reference_type})
-            else: # Default to text/entity type for other descriptive attributes
-                for attr, value in node_attributes.items():
-                    if attr != 'page' and isinstance(value, str) and value.strip() and {'type': 'text', 'content': value.strip(), 'reference_type': node_reference_type} not in kg_context_structured:
-                        kg_context_structured.append({'type': 'text', 'content': value.strip(), 'reference_type': node_reference_type})
+                    context_item = {'type': 'table', 'content': f"Table: {str(matched_kg_node)}", 'reference_type': node_reference_type}
+                    if not _is_context_item_duplicate(context_item, kg_context_structured):
+                        kg_context_structured.append(context_item)
+                        print(f"DEBUG: Added table context (data): {context_item}") # Debug print
+                else: # Default to text/entity type for other descriptive attributes
+                    for attr, value in node_attributes.items():
+                        if attr != 'page' and isinstance(value, str) and value.strip():
+                            context_item = {'type': 'text', 'content': value.strip(), 'reference_type': node_reference_type}
+                            if not _is_context_item_duplicate(context_item, kg_context_structured):
+                                kg_context_structured.append(context_item)
+                                print(f"DEBUG: Added generic text context from node attributes: {context_item}") # Debug print
 
             # Explore neighbors and predecessors (1-hop traversal for now)
             for connected_node in list(RAG_DOCUMENT_KG.neighbors(matched_kg_node)) + list(RAG_DOCUMENT_KG.predecessors(matched_kg_node)):
+                print(f"DEBUG: Exploring connected node: {connected_node}") # Debug print
                 connected_node_attributes = RAG_DOCUMENT_KG.nodes[connected_node]
                 connected_node_type = connected_node_attributes.get('type', 'entity')
                 connected_node_reference_type = connected_node_attributes.get('reference_type', connected_node_type)
@@ -128,28 +153,48 @@ def retrieve_context(query_embedding, top_k=3):
                 if connected_node_type == 'image':
                     filename = connected_node_attributes.get('filename')
                     caption = connected_node_attributes.get('caption')
-                    if filename and caption and {'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': connected_node_reference_type} not in kg_context_structured:
-                        kg_context_structured.append({'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': connected_node_reference_type})
+                    if filename and caption:
+                        context_item = {'type': 'image', 'filename': filename, 'caption': caption, 'reference_type': connected_node_reference_type}
+                        if not _is_context_item_duplicate(context_item, kg_context_structured):
+                            kg_context_structured.append(context_item)
+                            print(f"DEBUG: Added connected image context: {context_item}") # Debug print
                 elif connected_node_type == 'table':
                     summary = connected_node_attributes.get('summary')
-                    if summary and {'type': 'table', 'content': summary, 'reference_type': connected_node_reference_type} not in kg_context_structured:
-                         kg_context_structured.append({'type': 'table', 'content': summary, 'reference_type': connected_node_reference_type})
-                    elif connected_node_attributes.get('data') and {'type': 'table', 'content': f"Table: {str(connected_node)}", 'reference_type': connected_node_reference_type} not in kg_context_structured: # Fallback
-                         kg_context_structured.append({'type': 'table', 'content': f"Table: {str(connected_node)}", 'reference_type': connected_node_reference_type})
-                else: # Default to text/entity type
-                    if len(str(connected_node).strip().split()) > 1 and {'type': 'text', 'content': str(connected_node).strip(), 'reference_type': connected_node_reference_type} not in kg_context_structured:
-                        kg_context_structured.append({'type': 'text', 'content': str(connected_node).strip(), 'reference_type': connected_node_reference_type})
-                    for attr, value in connected_node_attributes.items():
-                        if attr != 'page' and isinstance(value, str) and value.strip() and {'type': 'text', 'content': value.strip(), 'reference_type': connected_node_reference_type} not in kg_context_structured:
-                            kg_context_structured.append({'type': 'text', 'content': value.strip(), 'reference_type': connected_node_reference_type})
+                    if summary:
+                        context_item = {'type': 'table', 'content': summary, 'reference_type': connected_node_reference_type}
+                        if not _is_context_item_duplicate(context_item, kg_context_structured):
+                             kg_context_structured.append(context_item)
+                             print(f"DEBUG: Added connected table context (summary): {context_item}") # Debug print
+                    elif connected_node_attributes.get('data'): # Fallback
+                        context_item = {'type': 'table', 'content': f"Table: {str(connected_node)}", 'reference_type': connected_node_reference_type}
+                        if not _is_context_item_duplicate(context_item, kg_context_structured):
+                             kg_context_structured.append(context_item)
+                             print(f"DEBUG: Added connected table context (data): {context_item}") # Debug print
+                    else: # Default to text/entity type
+                        if len(str(connected_node).strip().split()) > 1:
+                            context_item = {'type': 'text', 'content': str(connected_node).strip(), 'reference_type': connected_node_reference_type}
+                            if not _is_context_item_duplicate(context_item, kg_context_structured):
+                                kg_context_structured.append(context_item)
+                                print(f"DEBUG: Added connected text context: {context_item}") # Debug print
+                        for attr, value in connected_node_attributes.items():
+                            if attr != 'page' and isinstance(value, str) and value.strip():
+                                context_item = {'type': 'text', 'content': value.strip(), 'reference_type': connected_node_reference_type}
+                                if not _is_context_item_duplicate(context_item, kg_context_structured):
+                                    kg_context_structured.append(context_item)
+                                    print(f"DEBUG: Added connected generic text context from node attributes: {context_item}") # Debug print
 
-                # Add edge data as text context if descriptive
-                edge_data_list = RAG_DOCUMENT_KG.get_edge_data(matched_kg_node, connected_node, default={}) # Handle potential non-existent edge for MultiDiGraph
-                if isinstance(edge_data_list, dict): # For MultiDiGraph, get_edge_data returns a dict of edge keys to data
-                    for key in edge_data_list:
-                        relation_value = edge_data_list[key].get('relation')
-                        if relation_value and relation_value.strip() and {'type': 'text', 'content': relation_value.strip(), 'reference_type': 'relation'} not in kg_context_structured:
-                            kg_context_structured.append({'type': 'text', 'content': relation_value.strip(), 'reference_type': 'relation'})
+                    # Add edge data as text context if descriptive
+                    edge_data_list = RAG_DOCUMENT_KG.get_edge_data(matched_kg_node, connected_node, default={}) # Handle potential non-existent edge for MultiDiGraph
+                    if isinstance(edge_data_list, dict): # For MultiDiGraph, get_edge_data returns a dict of edge keys to data
+                        for key in edge_data_list:
+                            relation_value = edge_data_list[key].get('relation')
+                            if relation_value and relation_value.strip():
+                                context_item = {'type': 'text', 'content': relation_value.strip(), 'reference_type': 'relation'}
+                                if not _is_context_item_duplicate(context_item, kg_context_structured):
+                                    kg_context_structured.append(context_item)
+                                    print(f"DEBUG: Added edge context: {context_item}") # Debug print
+
+    print(f"DEBUG: KG-expanded context: {kg_context_structured}") # Debug print
 
     # Combine original retrieved text chunks with KG-expanded structured context
     final_retrieved_context = retrieved_chunks_structured + kg_context_structured
@@ -197,7 +242,7 @@ if __name__ == "__main__":
         print(f"\nTest Query: {test_query}")
         
         # Embed the query (using text embedding model from embedding_manager)
-        from embedding_manager import text_tokenizer as embed_tokenizer, text_model as embed_model
+        from src.embedding_manager import text_tokenizer as embed_tokenizer, text_model as embed_model
         inputs = embed_tokenizer(test_query, return_tensors="pt").to(RAG_DEVICE)
         with torch.no_grad():
             model_output = embed_model(**inputs)

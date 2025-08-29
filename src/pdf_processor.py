@@ -2,7 +2,7 @@ import fitz  # PyMuPDF
 import pdfplumber
 import csv
 import os
-from data_manager import record_extracted_files, OUTPUT_DIR
+from src.data_manager import record_extracted_files, OUTPUT_DIR
 
 def process_pdf(pdf_path):
     """

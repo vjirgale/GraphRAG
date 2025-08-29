@@ -29,7 +29,7 @@ Pillow
 # uvicorn
 
 # # For Table DataFrame manipulation
-# pandas
+pandas
 
 # For text chunking
 langchain-text-splitters
