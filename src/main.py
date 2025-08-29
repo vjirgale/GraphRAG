@@ -1,3 +1,9 @@
+import sys
+import os
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import argparse
 import os
 import numpy as np # Import numpy
@@ -19,71 +25,70 @@ from scripts.kg_visualizer import visualize_kg # Import for KG visualization
 def handle_pdf_extraction(pdf_file, extract_flag):
     """Handles PDF extraction or loading of previously extracted data."""
     pages_data = []
+    all_images = []
+    all_tables = []
     if extract_flag:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         try:
-            _, _, _, pages_data = process_pdf(pdf_file)
+            pages_data, all_images, all_tables = process_pdf(pdf_file)
             save_pages_data(pages_data)
         except Exception as e:
             print(f"Error during PDF processing: {e}")
-            pages_data = []
+            pages_data, all_images, all_tables = [], [], []
     else:
         print("Skipping PDF extraction. Attempting to load previously extracted data...")
         pages_data = load_pages_data()
         if not pages_data:
             print("No previously extracted data found to load. Please run with -e to extract data first.")
-    return pages_data
+        else:
+            # Re-collect images and tables from loaded pages_data
+            all_images = [img['filename'] for page in pages_data for img in page['images']]
+            all_tables = [table for page in pages_data for table in page['tables']]
 
-def process_extracted_data(pages_data, text, image_files, tables):
+    return pages_data, all_images, all_tables
+
+def process_extracted_data(pages_data, image_files, tables):
     """Processes extracted data: summarizes tables, creates knowledge graph, and embeds content."""
     print(f"DEBUG: Entering main processing block. Pages found: {len(pages_data)}, Images found: {len(image_files)}, Tables found: {len(tables)}.")
     print(f"Extracted {len(image_files)} images.")
     print(f"DEBUG: Extracted {len(tables)} tables.")
 
-    # Summarize tables
-    table_summaries = {}
-    for idx, table_data_raw in enumerate(tables):
-        table_id = f"Table_{idx+1}"
-        try:
-            summary = summarize_table_with_llm(table_data_raw)
-            table_summaries[table_id] = summary
-            print(f"Summary for {table_id}: {summary}")
-        except Exception as e:
-            print(f"Error summarizing {table_id}: {e}")
-            table_summaries[table_id] = "" # Store empty summary on error
-
+    # Summarize tables - this logic needs to be adapted as tables are now within pages_data
+    # We will perform summarization inside the KG building loop for simplicity
+    
     # Reconstruct pages_data with table summaries embedded
-    final_pages_data = []
-    table_counter_for_pages_data = 0
-    for page_data in pages_data:
-        current_page_tables_with_summaries = []
-        for raw_table_from_page in page_data['tables']:
-            table_counter_for_pages_data += 1
-            current_table_id = f"Table_{table_counter_for_pages_data}"
-            current_page_tables_with_summaries.append({
-                'data': raw_table_from_page,
-                'summary': table_summaries.get(current_table_id, "No summary generated")
-            })
-        final_pages_data.append({
-            'page_id': page_data['page_id'],
-            'text': page_data['text'],
-            'images': page_data['images'],
-            'tables': current_page_tables_with_summaries
-        })
-    pages_data = final_pages_data # Update pages_data with the structured table info
+    # This is now handled within the KG building process, so we can simplify here.
 
     # Knowledge Graph Creation
     print("DEBUG: Attempting Knowledge Graph Creation block.")
     try:
         print("Starting Knowledge Graph creation...")
         page_kps = []
+        all_text_chunks = []
+
         for page_data in pages_data:
             page_id = page_data['page_id']
-            page_text = page_data['text']
+            text_chunks = page_data['text_chunks']
+            all_text_chunks.extend(text_chunks)
             page_images = page_data['images']
-            page_tables = page_data['tables']
             
-            page_kg = build_page_kg(page_id, page_text, page_images, page_tables)
+            # Summarize tables for the current page before building the KG
+            summarized_tables = []
+            for table_data_raw in page_data['tables']:
+                try:
+                    summary = summarize_table_with_llm(table_data_raw)
+                    summarized_tables.append({
+                        'data': table_data_raw,
+                        'summary': summary
+                    })
+                except Exception as e:
+                    print(f"Error summarizing table on page {page_id}: {e}")
+                    summarized_tables.append({
+                        'data': table_data_raw,
+                        'summary': "No summary generated"
+                    })
+            
+            page_kg = build_page_kg(page_id, text_chunks, page_images, summarized_tables)
             page_kps.append(page_kg)
             print(f"Created Knowledge Graph for Page {page_id} with {page_kg.number_of_nodes()} nodes and {page_kg.number_of_edges()} edges.")
         
@@ -97,14 +102,15 @@ def process_extracted_data(pages_data, text, image_files, tables):
     # Text Chunking and Embedding
     try:
         print("Starting text chunking and embedding...")
-        text_chunks, text_embeddings = embed_text_chunks(text)
-        save_text_chunks_and_embeddings(text_chunks, text_embeddings)
+        # We now use all_text_chunks collected during KG creation
+        text_embeddings = embed_text_chunks(all_text_chunks)
+        save_text_chunks_and_embeddings(all_text_chunks, text_embeddings)
         
         # Build and save FAISS index for text chunks
         text_index_filepath = os.path.join(OUTPUT_DIR, TEXT_FAISS_INDEX_FILE)
         build_and_save_faiss_index(text_embeddings, text_index_filepath, index_type="FlatL2")
         
-        print(f"Created {len(text_chunks)} text chunks and {len(text_embeddings)} embeddings.")
+        print(f"Created {len(all_text_chunks)} text chunks and {len(text_embeddings)} embeddings.")
     except Exception as e:
         print(f"Error during text chunking and embedding: {e}")
 
@@ -198,21 +204,18 @@ def run_rag_interactive_loop():
         print(f"DEBUG main.py: Total query processing time: {end_query_processing - start_query_processing:.2f} seconds")
 
 def extract_and_process_data(args):
-    pdf_file = args.pdf_file if args.pdf_file else "Trumpf-RAG/Brochures/TRUMPF-bending-tools-catalog-EN-shorter.pdf"
+    pdf_file = args.pdf_file if args.pdf_file else "Brochures/TRUMPF/TRUMPF-bending-tools-catalog-EN-shorter.pdf"
     
     if args.delete_previous:
         delete_previous_data(backup=args.backup)
 
-    pages_data = handle_pdf_extraction(pdf_file, True) # Always extract if this mode is chosen
+    pages_data, image_files, tables = handle_pdf_extraction(pdf_file, True) # Always extract if this mode is chosen
     if not pages_data:
         return # Exit if no data to process
 
-    text = "\n".join([page['text'] for page in pages_data])
-    image_files = [img_data['filename'] for page in pages_data for img_data in page['images']]
-    tables = [table_data for page in pages_data for table_data in page['tables']]
     print(f"Loaded {len(pages_data)} pages of data, {len(image_files)} images, {len(tables)} tables.")
 
-    process_extracted_data(pages_data, text, image_files, tables)
+    process_extracted_data(pages_data, image_files, tables)
 
 def run_rag_pipeline_func():
     print("\n--- Starting RAG Interactive Query ---")

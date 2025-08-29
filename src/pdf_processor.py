@@ -4,42 +4,45 @@ import csv
 import os
 from src.data_manager import record_extracted_files, OUTPUT_DIR
 
-def process_pdf(pdf_path):
+def process_pdf(pdf_path, chunk_size=500, overlap=50):
     """
-    Processes a PDF file to extract text, images, and tables.
+    Processes a PDF file to extract text chunks, images, and tables for each page.
 
     Args:
         pdf_path (str): The path to the PDF file.
+        chunk_size (int): The character size for each text chunk.
+        overlap (int): The character overlap between consecutive chunks.
 
     Returns:
         tuple: A tuple containing:
-            - str: Concatenated text from all pages.
-            - list: A list of file paths to extracted images.
-            - list: A list of extracted tables (each table is a list of lists).
+            - list: A list of page-wise data dictionaries.
+            - list: A list of file paths to all extracted images.
+            - list: A list of all extracted tables.
     """
-    all_text = []
     all_images = []
     all_tables = []
     extracted_files = []
-    pages_data = [] # New list to store page-wise extracted data
+    pages_data = []
 
     try:
         doc = fitz.open(pdf_path)
         plumber_pdf = pdfplumber.open(pdf_path)
     except Exception as e:
         print(f"Error opening PDF file {pdf_path}: {e}")
-        return "", [], [], [] # Return empty data on error, including pages_data
+        return [], [], []
 
     with doc, plumber_pdf as plumber_pdf_context:
         for page_num in range(len(doc)):
-            current_page_images = [] # Images for the current page
-            current_page_tables = [] # Tables for the current page
-
-            # Text extraction
             page = doc[page_num]
             text = page.get_text()
-            all_text.append(text)
 
+            # Chunk the text for the current page
+            text_chunks = []
+            for i in range(0, len(text), chunk_size - overlap):
+                chunk = text[i:i + chunk_size]
+                text_chunks.append(chunk)
+
+            current_page_images = []
             # Image extraction
             for img_index, img in enumerate(page.get_images(full=True)):
                 xref = img[0]
@@ -52,30 +55,11 @@ def process_pdf(pdf_path):
                         img_file.write(image_bytes)
                     all_images.append(image_filename)
                     extracted_files.append(image_filename)
-
-                    # --- New: Extract text near image for potential caption ---
-                    img_bbox = page.get_image_bbox(img)
-                    caption = ""
-                    # Search for text blocks that are close to the image
-                    for text_block in page.get_text("blocks"):
-                        # text_block format: (x0, y0, x1, y1, "text", block_no, block_type)
-                        text_bbox = fitz.Rect(text_block[0], text_block[1], text_block[2], text_block[3])
-                        # Check if text block is just above, below, or overlaps with image horizontally
-                        if (abs(text_bbox.y1 - img_bbox.y0) < 30 or # text above image
-                            abs(text_bbox.y0 - img_bbox.y1) < 30) and \
-                           (max(text_bbox.x0, img_bbox.x0) < min(text_bbox.x1, img_bbox.x1)): # horizontal overlap
-                            
-                            # Further refine to ensure text is "small" relative to a full paragraph
-                            # and is positioned reasonably close (e.g. within 100 units vertically)
-                            if text_bbox.height < 100 and (abs(text_bbox.y1 - img_bbox.y0) < 100 or abs(text_bbox.y0 - img_bbox.y1) < 100):
-                                caption += text_block[4] + " "
-                    
-                    current_page_images.append({'filename': image_filename, 'caption': caption.strip()})
-                    # --- End New ---
-
+                    current_page_images.append({'filename': image_filename, 'caption': ''}) # Placeholder for caption
                 except Exception as img_err:
                     print(f"Error saving image {image_filename}: {img_err}")
 
+            current_page_tables = []
             # Table extraction
             plumber_page = plumber_pdf_context.pages[page_num]
             tables = plumber_page.extract_tables()
@@ -86,18 +70,30 @@ def process_pdf(pdf_path):
                         writer = csv.writer(f)
                         writer.writerows(table)
                     all_tables.append(table)
-                    current_page_tables.append(table) # Add to current page tables (actual data)
+                    current_page_tables.append(table)
                     extracted_files.append(csv_filename)
+                    
+                    # Convert each row of the table into a descriptive sentence
+                    if table and len(table) > 1:
+                        headers = table[0]
+                        for row in table[1:]:
+                            attribute_name = row[0]
+                            if not attribute_name:
+                                continue
+                            for i, cell_value in enumerate(row[1:]):
+                                model_name = headers[i+1]
+                                if model_name and cell_value:
+                                    sentence = f"For {model_name}, the {attribute_name} is {cell_value}."
+                                    text_chunks.append(sentence)
                 except Exception as csv_err:
                     print(f"Error saving table {csv_filename}: {csv_err}")
             
-            # Store page-wise data
             pages_data.append({
                 'page_id': page_num + 1,
-                'text': text,
-                'images': current_page_images, # This now contains dicts with filename and caption
+                'text_chunks': text_chunks,
+                'images': current_page_images,
                 'tables': current_page_tables
             })
 
     record_extracted_files(extracted_files)
-    return "\n".join(all_text), all_images, all_tables, pages_data # Return pages_data as well
+    return pages_data, all_images, all_tables
