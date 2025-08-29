@@ -14,6 +14,7 @@ import time # Import time for benchmarking
 # Import for data management
 from src.data_manager import save_pages_data, load_pages_data, PAGES_DATA_FILE
 from src.report_generator import generate_html_report, save_html_report # Import report generation functions
+from scripts.kg_visualizer import visualize_kg # Import for KG visualization
 
 def handle_pdf_extraction(pdf_file, extract_flag):
     """Handles PDF extraction or loading of previously extracted data."""
@@ -196,36 +197,13 @@ def run_rag_interactive_loop():
         end_query_processing = time.time()
         print(f"DEBUG main.py: Total query processing time: {end_query_processing - start_query_processing:.2f} seconds")
 
-def run_pipeline(args):
-    # Provide your PDF file path here
+def extract_and_process_data(args):
     pdf_file = args.pdf_file if args.pdf_file else "Trumpf-RAG/Brochures/TRUMPF-bending-tools-catalog-EN-shorter.pdf"
-    # text = None # Removed as it's reconstructed from pages_data
-    # image_files = None # Removed as it's reconstructed from pages_data
-    # tables = None # Removed as it's reconstructed from pages_data
-    # pages_data = [] # Removed as it's initialized in handle_pdf_extraction
-
-    # Handle deletion of previous data
+    
     if args.delete_previous:
         delete_previous_data(backup=args.backup)
 
-    if args.only_rag:
-        print("Running in RAG-only mode. Loading existing assets and starting interactive query...")
-        start_load_assets = time.time()
-        src.rag_pipeline.load_retrieval_assets()
-        end_load_assets = time.time()
-        print(f"DEBUG main.py: Asset loading time: {end_load_assets - start_load_assets:.2f} seconds")
-
-        print(f"DEBUG main.py: TEXT_FAISS_INDEX: {src.rag_pipeline.TEXT_FAISS_INDEX is not None}")
-        print(f"DEBUG main.py: LOADED_TEXT_CHUNKS: {src.rag_pipeline.LOADED_TEXT_CHUNKS is not None}")
-        print(f"DEBUG main.py: RAG_DOCUMENT_KG: {src.rag_pipeline.RAG_DOCUMENT_KG is not None}")
-        if not (src.rag_pipeline.TEXT_FAISS_INDEX and src.rag_pipeline.LOADED_TEXT_CHUNKS and src.rag_pipeline.RAG_DOCUMENT_KG):
-            print("RAG assets could not be loaded. Please ensure main.py -e was run successfully before running in --only-rag mode.")
-            return
-        run_rag_interactive_loop() # Call the new interactive loop function
-        return # Exit after RAG-only mode
-
-    # Extract data from PDF if flag is set
-    pages_data = handle_pdf_extraction(pdf_file, args.extract)
+    pages_data = handle_pdf_extraction(pdf_file, True) # Always extract if this mode is chosen
     if not pages_data:
         return # Exit if no data to process
 
@@ -234,14 +212,11 @@ def run_pipeline(args):
     tables = [table_data for page in pages_data for table_data in page['tables']]
     print(f"Loaded {len(pages_data)} pages of data, {len(image_files)} images, {len(tables)} tables.")
 
-    # Process extracted data for summarization and embedding
-    # The check for `if pages_data:` is now handled within `handle_pdf_extraction` and `process_extracted_data`
-    process_extracted_data(pages_data, text, image_files, tables) # Call the new data processing function
+    process_extracted_data(pages_data, text, image_files, tables)
 
-    # RAG Answer Generation (Interactive Loop)
+def run_rag_pipeline_func():
     print("\n--- Starting RAG Interactive Query ---")
     try:
-        # Ensure output directory and essential files exist for RAG
         text_chunks_filepath = os.path.join(OUTPUT_DIR, TEXT_CHUNKS_FILE)
         text_faiss_index_filepath = os.path.join(OUTPUT_DIR, TEXT_FAISS_INDEX_FILE)
         
@@ -249,7 +224,7 @@ def run_pipeline(args):
         print(f"DEBUG: Checking for text_faiss_index.bin at: {os.path.abspath(text_faiss_index_filepath)}")
         
         if not (os.path.exists(text_chunks_filepath) and os.path.exists(text_faiss_index_filepath)):
-            print(f"RAG assets not found at {OUTPUT_DIR}. Please ensure main.py -e was run successfully.")
+            print(f"RAG assets not found at {OUTPUT_DIR}. Please ensure data extraction and processing was run successfully.")
             print(f"Missing: {text_chunks_filepath} or {text_faiss_index_filepath}")
         else:
             src.rag_pipeline.load_retrieval_assets() # Load FAISS index and text chunks
@@ -263,13 +238,30 @@ def run_pipeline(args):
     except Exception as e:
         print(f"Error during RAG interactive query: {e}")
 
+def run_kg_visualization_func():
+    print("Loading document knowledge graph for visualization...")
+    document_kg = src.data_manager.load_knowledge_graph(src.data_manager.DOCUMENT_KG_FILE, graph_type="document")
+    if document_kg:
+        visualize_kg(document_kg)
+    else:
+        print("No knowledge graph found. Please ensure data extraction and processing was run successfully.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PDF Extraction and Processing")
-    parser.add_argument("-e", "--extract", action="store_true", help="Extract data from PDF")
     parser.add_argument("-d", "--delete-previous", action="store_true", help="Delete previously extracted data")
     parser.add_argument("-b", "--backup", action="store_true", help="Take a backup of previously extracted data before deleting")
     parser.add_argument("-f", "--pdf-file", type=str, help="Path to the PDF file to process")
-    parser.add_argument("-r", "--only-rag", action="store_true", help="Only run RAG answer generation on previously processed data.") # New argument
+    parser.add_argument("-e", "--extract-process-data", action="store_true", help="Extract data from PDF, process it (summarize tables, build KG), and embed content.")
+    parser.add_argument("-r", "--run-rag", action="store_true", help="Run RAG answer generation on previously processed data.")
+    parser.add_argument("-v", "--visualize-kg", action="store_true", help="Visualize the document knowledge graph.")
     args = parser.parse_args()
 
-    run_pipeline(args)
+    if args.extract_process_data:
+        extract_and_process_data(args)
+    elif args.run_rag:
+        run_rag_pipeline_func()
+    elif args.visualize_kg:
+        run_kg_visualization_func()
+    else:
+        parser.print_help()
+        print("\nNo action specified. Please use --extract-process-data, --run-rag, or --visualize-kg.")

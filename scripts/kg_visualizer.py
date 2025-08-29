@@ -6,7 +6,7 @@ import sys
 # Add the parent directory to the Python path to allow importing modules from the project root
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from data_manager import load_knowledge_graph, DOCUMENT_KG_FILE, OUTPUT_DIR
+from src.data_manager import load_knowledge_graph, DOCUMENT_KG_FILE, OUTPUT_DIR
 
 def visualize_kg(graph):
     """
